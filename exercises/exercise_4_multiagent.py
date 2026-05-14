@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
+from langgraph.checkpoint.memory import MemorySaver
 
 from common.llm import get_llm
 
@@ -59,7 +60,8 @@ def check_routing(state: State) -> list[Send]:
     if any(kw in question_lower for kw in ["compliance", "sec", "regulation"]):
         tasks.append(Send("compliance_agent", state))
     
-    # YOUR CODE HERE: thêm điều kiện cho privacy_agent
+    if any(kw in question_lower for kw in ["data", "privacy", "gdpr", "dữ liệu"]):
+        tasks.append(Send("privacy_agent", state))
     
     return tasks if tasks else [Send("aggregate_results", state)]
 
@@ -92,13 +94,19 @@ Tập trung: SEC, SOX, FCPA, AML, regulatory violations."""
     return {"compliance_analysis": response.content}
 
 
-# TODO: Implement privacy_agent
 def privacy_agent(state: State) -> dict:
     """Agent chuyên về bảo vệ dữ liệu cá nhân và GDPR."""
-    # YOUR CODE HERE
-    # Gợi ý: tương tự tax_agent và compliance_agent
-    # Tập trung: GDPR, data protection, privacy rights, data breach
-    pass
+    llm = get_llm()
+    prompt = f"""Bạn là chuyên gia về GDPR và luật bảo vệ dữ liệu cá nhân. 
+    Phân tích các vấn đề về quyền riêng tư và bảo mật dữ liệu:
+
+Câu hỏi: {state['question']}
+Phân tích pháp lý: {state.get('law_analysis', 'N/A')}
+
+Tập trung: GDPR, data protection, privacy rights, data breach, penalties for data leaks."""
+    
+    response = llm.invoke([HumanMessage(content=prompt)])
+    return {"privacy_analysis": response.content}
 
 
 def aggregate_results(state: State) -> dict:
@@ -112,7 +120,8 @@ def aggregate_results(state: State) -> dict:
         sections.append(f"💰 PHÂN TÍCH THUẾ:\n{state['tax_analysis']}")
     if state.get("compliance_analysis"):
         sections.append(f"✅ PHÂN TÍCH TUÂN THỦ:\n{state['compliance_analysis']}")
-    # TODO: Thêm privacy_analysis vào sections
+    if state.get("privacy_analysis"):
+        sections.append(f"🔒 PHÂN TÍCH QUYỀN RIÊNG TƯ (PRIVACY):\n{state['privacy_analysis']}")
     
     combined = "\n\n".join(sections)
     
@@ -137,7 +146,7 @@ def build_graph() -> StateGraph:
     graph.add_node("check_routing", check_routing)
     graph.add_node("tax_agent", tax_agent)
     graph.add_node("compliance_agent", compliance_agent)
-    # TODO: Thêm privacy_agent node
+    graph.add_node("privacy_agent", privacy_agent)
     graph.add_node("aggregate_results", aggregate_results)
     
     # Define edges
@@ -146,10 +155,13 @@ def build_graph() -> StateGraph:
     graph.add_conditional_edges("check_routing", lambda x: x)
     graph.add_edge("tax_agent", "aggregate_results")
     graph.add_edge("compliance_agent", "aggregate_results")
-    # TODO: Thêm edge từ privacy_agent đến aggregate_results
+    graph.add_edge("privacy_agent", "aggregate_results")
     graph.add_edge("aggregate_results", END)
     
-    return graph.compile()
+    # Add memory checkpointer
+    memory = MemorySaver()
+    
+    return graph.compile(checkpointer=memory)
 
 
 async def main():
@@ -166,6 +178,8 @@ async def main():
     
     graph = build_graph()
     
+    config = {"configurable": {"thread_id": "user_123"}}
+    
     result = await graph.ainvoke({
         "question": question,
         "law_analysis": "",
@@ -173,12 +187,26 @@ async def main():
         "compliance_analysis": "",
         "privacy_analysis": "",
         "final_response": "",
-    })
+    }, config=config)
     
     print("\n" + "=" * 70)
-    print("KẾT QUẢ CUỐI CÙNG")
+    print("KẾT QUẢ CUỐI CÙNG (Lần 1)")
     print("=" * 70)
     print(result["final_response"])
+    
+    # Test memory: hỏi thêm một câu liên quan
+    follow_up = "Tôi cần lưu ý gì thêm về thuế nếu ở Việt Nam?"
+    print(f"\n\nCâu hỏi tiếp theo: {follow_up}\n")
+    
+    result_2 = await graph.ainvoke({
+        "question": follow_up,
+    }, config=config)
+    
+    print("\n" + "=" * 70)
+    print("KẾT QUẢ CUỐI CÙNG (Lần 2 - Có Memory)")
+    print("=" * 70)
+    print(result_2["final_response"])
+    print("\n" + "=" * 70)
     print("\n" + "=" * 70)
 
 
